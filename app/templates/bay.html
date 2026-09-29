@@ -144,7 +144,8 @@
         const params = new URLSearchParams(window.location.search);
         if (params.has('workshop') && this.filterWs === null) {
           const w = parseInt(params.get('workshop'), 10);
-          if (!isNaN(w)) this.filterWs = w;
+          // 与后端同口径：只接受真实存在的工坊主键，否则保持「全部缸位」
+          if (!isNaN(w) && this.workshops.some(x => x.id === w)) this.filterWs = w;
         }
         if (params.has('vat') && this.selectedId === null) {
           const v = parseInt(params.get('vat'), 10);
@@ -164,11 +165,8 @@
       },
       filteredVats() {
         if (this.filterWs === null) return this.vats;
-        const shop = this.workshops.find(w => w.id === this.filterWs);
-        if (!shop) return this.vats.filter(v => v.workshopId === this.filterWs);
-        // 筛选用缸号集合：同号会把乙坊缸带进甲坊
-        const codes = new Set(this.vats.filter(v => v.workshopName === shop.name).map(v => v.code));
-        return this.vats.filter(v => codes.has(v.code));
+        // 只按染缸主键上的 workshopId 过滤，禁止用缸号集合串坊
+        return this.vats.filter(v => v.workshopId === this.filterWs);
       },
       toggle(id) {
         this.selectedId = this.selectedId === id ? null : id;
