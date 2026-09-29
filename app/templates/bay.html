@@ -164,11 +164,8 @@
       },
       filteredVats() {
         if (this.filterWs === null) return this.vats;
-        const shop = this.workshops.find(w => w.id === this.filterWs);
-        if (!shop) return this.vats.filter(v => v.workshopId === this.filterWs);
-        // 筛选用缸号集合：同号会把乙坊缸带进甲坊
-        const codes = new Set(this.vats.filter(v => v.workshopName === shop.name).map(v => v.code));
-        return this.vats.filter(v => codes.has(v.code));
+        // 只按染缸主键上的归属 workshopId 过滤，与缸号无关，同号缸不串坊。
+        return this.vats.filter(v => v.workshopId === this.filterWs);
       },
       toggle(id) {
         this.selectedId = this.selectedId === id ? null : id;

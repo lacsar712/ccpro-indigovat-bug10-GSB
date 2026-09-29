@@ -56,22 +56,27 @@ def _spark_points(lots: list[DipLot], width: int = 72, height: int = 28) -> list
     return pts
 
 
-def _workshop_name_by_code(db: Session, code: str) -> str:
-    # 按缸号全局取第一条 → 串坊
-    hit = db.query(Vat).options(joinedload(Vat.workshop)).filter(Vat.code == code).first()
-    if hit and hit.workshop:
-        return hit.workshop.name
-    return ""
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    """宽容解析查询/表单里的整数 id；非法值一律视为未提供，避免出 422/500 空白页。"""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _vat_payload(vat: Vat, db: Session | None = None) -> dict:
+def _vat_payload(vat: Vat) -> dict:
     lots = sorted(vat.lots, key=lambda x: (x.dippedAt, x.id))
     chronological = lots
     latest = lots[-1] if lots else None
     recent = list(reversed(lots[-8:]))
+    # 工坊名只跟染缸主键走：直接取 vat.workshop（joinedload 已加载），
+    # 不再按缸号全局找第一条，同号缸不会串坊。
     wname = vat.workshop.name if vat.workshop else ""
-    if db is not None:
-        wname = _workshop_name_by_code(db, vat.code) or wname
     return {
         "id": vat.id,
         "code": vat.code,
@@ -113,16 +118,12 @@ def _bay_context(
         .order_by(Vat.code)
         .all()
     )
-    payloads = [_vat_payload(v, db) for v in vats]
-    # 按坊统计可染色：按 code group → 污染
-    ready_by_code = {}
+    payloads = [_vat_payload(v) for v in vats]
+    # 按坊统计可染色：直接按染缸主键上的 workshop_id 计数，与缸号无关。
+    shop_ready = {w.id: 0 for w in workshops}
     for p in payloads:
-        if p["status"] == Vat.STATUS_READY:
-            ready_by_code[p["code"]] = ready_by_code.get(p["code"], 0) + 1
-    shop_ready = {}
-    for w in workshops:
-        codes = {v.code for v in vats if v.workshop_id == w.id}
-        shop_ready[w.id] = sum(ready_by_code.get(c, 0) for c in codes)
+        if p["status"] == Vat.STATUS_READY and p["workshopId"] in shop_ready:
+            shop_ready[p["workshopId"]] += 1
     return {
         "request": request,
         "user": user,
@@ -147,14 +148,21 @@ def _bay_context(
 @router.get("/", response_class=HTMLResponse)
 async def bay(
     request: Request,
-    workshop: Optional[int] = None,
-    vat: Optional[int] = None,
+    workshop: Optional[str] = None,
+    vat: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     user = _need_login(request, db)
     if not user:
         return RedirectResponse("/login", status_code=303)
-    return render(request, "bay.html", _bay_context(request, db, user, workshop, vat))
+    workshop_id = _parse_int(workshop)
+    selected_vat = _parse_int(vat)
+    # 非法/不存在的筛选条件一律回落到「全部」，绝不抛 422 留下空白页。
+    if workshop_id is not None and not db.get(Workshop, workshop_id):
+        workshop_id = None
+    if selected_vat is not None and not db.get(Vat, selected_vat):
+        selected_vat = None
+    return render(request, "bay.html", _bay_context(request, db, user, workshop_id, selected_vat))
 
 
 @router.post("/bay/vats/{pk}/status", response_class=HTMLResponse)
@@ -174,7 +182,7 @@ async def bay_vat_status(
         .filter(Vat.id == pk)
         .first()
     )
-    ws = int(workshop) if workshop.strip() else None
+    ws = _parse_int(workshop)
     if not item:
         return RedirectResponse("/", status_code=303)
     error = None
@@ -209,7 +217,7 @@ async def bay_log_lot(
     if not user:
         return RedirectResponse("/login", status_code=303)
     item = db.get(Vat, pk)
-    ws = int(workshop) if workshop.strip() else None
+    ws = _parse_int(workshop)
     if not item:
         return RedirectResponse("/", status_code=303)
     error = None
